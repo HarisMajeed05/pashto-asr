@@ -1,5 +1,7 @@
 transformers>=4.40.0
 datasets>=2.19.0
+datacollective
+python-dotenv
 accelerate
 evaluate
 jiwer
