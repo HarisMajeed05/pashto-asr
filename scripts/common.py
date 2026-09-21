@@ -17,6 +17,11 @@ import torch
 from transformers import WhisperProcessor
 
 TARGET_SAMPLING_RATE = 16000
+# Whisper's decoder has a fixed 448-token context window. Examples whose
+# tokenized transcript exceeds this can't be trained on at all (and
+# truncating would misalign the text against the full-length audio), so
+# they're filtered out downstream via MAX_LABEL_LENGTH.
+MAX_LABEL_LENGTH = 448
 
 
 def load_processor(model_id: str, language: str = "pashto"):

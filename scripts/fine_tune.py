@@ -25,7 +25,7 @@ from transformers import (
     Seq2SeqTrainingArguments,
 )
 
-from common import load_processor, prepare_example, WhisperDataCollator
+from common import load_processor, prepare_example, WhisperDataCollator, MAX_LABEL_LENGTH
 
 
 def main():
@@ -66,6 +66,13 @@ def main():
         num_proc=1,
     )
 
+    before = {split: len(dataset[split]) for split in dataset}
+    dataset = dataset.filter(lambda ex: len(ex["labels"]) <= MAX_LABEL_LENGTH)
+    for split in dataset:
+        dropped = before[split] - len(dataset[split])
+        if dropped:
+            print(f"  Dropped {dropped} {split} examples with labels longer than {MAX_LABEL_LENGTH} tokens")
+
     data_collator = WhisperDataCollator(processor=processor)
 
     training_args = Seq2SeqTrainingArguments(
@@ -94,7 +101,7 @@ def main():
         train_dataset=dataset["train"],
         eval_dataset=dataset.get("validation", dataset.get("test")),
         data_collator=data_collator,
-        tokenizer=processor.feature_extractor,
+        processing_class=processor.feature_extractor,
     )
 
     print(f"Fine-tuning {args.base_model} on Pashto data, {len(dataset['train'])} training examples")

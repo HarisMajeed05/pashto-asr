@@ -22,7 +22,7 @@ python scripts/prepare_data.py --out data/
 ## 2. Baseline, before fine-tuning
 
 ```bash
-python scripts/evaluate.py --model openai/whisper-small --data data/ --max-samples 100
+python scripts/run_eval.py --model openai/whisper-small --data data/ --max-samples 100
 ```
 
 Run this first, on the stock model, before touching fine-tuning. This
@@ -44,7 +44,7 @@ python scripts/fine_tune.py --data data/ --resume checkpoints/pashto/checkpoint-
 ## 4. After, compare against the baseline
 
 ```bash
-python scripts/evaluate.py --model checkpoints/pashto/final --data data/ --max-samples 100
+python scripts/run_eval.py --model checkpoints/pashto/final --data data/ --max-samples 100
 ```
 
 Report both numbers together. "WER dropped from X% to Y%" is a real,
