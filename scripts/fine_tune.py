@@ -1,11 +1,9 @@
 """
 scripts/fine_tune.py
 =======================
-Fine-tunes a Whisper checkpoint on Pashto Common Voice. Same reliability
-pattern as the earlier YOLO/RL projects: GPU auto-detected with CPU
-fallback, periodic checkpointing, safe resume after an interrupted run,
-using Hugging Face's own Seq2SeqTrainer, which already implements all of
-that correctly rather than reinventing it.
+Fine-tunes a Whisper checkpoint on Pashto Common Voice data. GPU
+auto-detected with a CPU fallback, periodic checkpointing, safe resume
+after an interrupted run, via Hugging Face's Seq2SeqTrainer.
 
 USAGE
 -----
@@ -20,7 +18,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 import torch
-from datasets import load_from_disk
+from datasets import load_from_disk, Audio
 from transformers import (
     WhisperForConditionalGeneration,
     Seq2SeqTrainer,
@@ -32,17 +30,17 @@ from common import load_processor, prepare_example, WhisperDataCollator
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="data", help="Path from prepare_data.py")
+    ap.add_argument("--data", default="data", help="Path produced by prepare_data.py")
     ap.add_argument("--base-model", default="openai/whisper-small",
-                     help="Starting checkpoint. whisper-small is a reasonable balance of "
-                          "quality vs how long fine-tuning takes, whisper-base if you need it faster")
+                     help="Starting checkpoint. whisper-small balances quality against training "
+                          "time, whisper-base trains faster")
     ap.add_argument("--output-dir", default="checkpoints/pashto")
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--learning-rate", type=float, default=1e-5)
-    ap.add_argument("--checkpoint-interval", type=int, default=200, help="Save every N steps")
+    ap.add_argument("--checkpoint-interval", type=int, default=200, help="Steps between checkpoints")
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
-    ap.add_argument("--resume", default=None, help="Path to a checkpoint folder to resume from")
+    ap.add_argument("--resume", default=None, help="Checkpoint folder to resume from")
     args = ap.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -60,6 +58,8 @@ def main():
     model.config.suppress_tokens = []
 
     dataset = load_from_disk(args.data)
+    dataset = dataset.cast_column("audio", Audio(decode=False))
+    dataset = dataset.filter(lambda ex: ex["sentence"] is not None and ex["sentence"].strip() != "")
     dataset = dataset.map(
         lambda b: prepare_example(b, processor),
         remove_columns=dataset["train"].column_names,
@@ -79,7 +79,7 @@ def main():
         eval_steps=args.checkpoint_interval,
         save_strategy="steps",
         save_steps=args.checkpoint_interval,
-        save_total_limit=3,
+        save_total_limit=3,  # keeps only the most recent 3 checkpoints
         logging_steps=25,
         predict_with_generate=True,
         generation_max_length=225,
@@ -97,7 +97,7 @@ def main():
         tokenizer=processor.feature_extractor,
     )
 
-    print(f"Fine-tuning {args.base_model} on Pashto, {len(dataset['train'])} training examples")
+    print(f"Fine-tuning {args.base_model} on Pashto data, {len(dataset['train'])} training examples")
     print(f"Checkpoints saved to {args.output_dir} every {args.checkpoint_interval} steps, last 3 kept")
 
     try:

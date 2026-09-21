@@ -1,49 +1,37 @@
 """
 scripts/prepare_data.py
 ==========================
-Loads the Pashto subset of Mozilla Common Voice and preprocesses it into
-the format Whisper expects: 16kHz audio arrays paired with tokenized
-target text.
+Loads Pashto Common Voice data and preprocesses it into the format Whisper
+expects: 16kHz audio arrays paired with tokenized target text.
 
-Pashto specifically: ~60 million speakers, historically near-zero platform
-support (Mozilla's own Pashto interface didn't exist before 2023), grown
-into a real community-built corpus since. Still far behind English/French
-tier languages in total hours, that gap is the actual thing this project
-measures.
+Pashto: ~60 million speakers, historically near-zero platform support,
+grown into a real community-built corpus in recent years. Still far behind
+English/French tier languages in total hours.
 
-IMPORTANT, as of this writing: Mozilla moved Common Voice off Hugging Face
-entirely in October 2025, to a new platform called Mozilla Data Collective.
-The old huggingface.co/datasets/mozilla-foundation/common_voice_* repos are
-now empty shells, load_dataset() on them fails with EmptyDatasetError, not
-an auth problem, the data genuinely isn't there anymore.
+Mozilla moved Common Voice off Hugging Face in October 2025, to a platform
+called Mozilla Data Collective. The old huggingface.co/datasets/
+mozilla-foundation/common_voice_* repos are now empty shells.
 
-SETUP, one-time:
-    1. Create an account at https://datacollective.mozillafoundation.org
-    2. Find the Pashto Common Voice dataset there, copy its dataset ID
-       from the end of that page's URL
-    3. Get an API key from your account dashboard
-    4. pip install "datacollective[hf]"   (the [hf] extra is needed for
-       return_format="hf" below, without it you only get pandas back)
-    5. export MDC_API_KEY=your-api-key-here   (or put it in a .env file)
+SETUP:
+    1. Account at https://datacollective.mozillafoundation.org
+    2. Dataset ID from the end of the dataset's page URL
+    3. API key from the account dashboard
+    4. pip install "datacollective[hf]"
+    5. MDC_API_KEY set in the environment or a .env file
 
 USAGE
 -----
-    python scripts/prepare_data.py --dataset-id <the-id-from-step-2> --out data/
+    python scripts/prepare_data.py --dataset-id <id> --out data/
 
-API NOTE: this was corrected after the first version guessed a client-class
-API (`DataCollective(...).load_dataset(...)`) that doesn't match what's
-actually installed. The real package exposes plain functions, verified by
-inspecting the installed package directly:
+The installed datacollective package exposes plain functions, not a
+client class:
     datacollective.load_dataset(dataset_id, return_format="hf" | "pandas")
-returning a HuggingFace Dataset/DatasetDict directly when return_format="hf"
-is available, or a pandas DataFrame otherwise, this script handles both.
+Returns a HuggingFace Dataset/DatasetDict when "hf" works, a pandas
+DataFrame otherwise. Both are handled below.
 
-This project's sandbox still can't reach datacollective.mozillafoundation.org
-itself, so the exact column names THIS SPECIFIC Pashto dataset uses
-couldn't be confirmed here. This script checks several likely names and
-PRINTS which one it actually found, if it guesses wrong, the printed
-column list tells you immediately what to pass via --audio-column /
---text-column instead of failing silently.
+Column names vary by dataset. This script checks several likely names and
+prints which one it finds, so a wrong guess is visible immediately instead
+of failing silently.
 """
 
 import argparse
@@ -53,9 +41,9 @@ from datasets import Dataset, DatasetDict, Audio
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # reads a .env file in the current directory into os.environ, if one exists
+    load_dotenv()  # loads MDC_API_KEY from a .env file into the environment, if one exists
 except ImportError:
-    pass  # python-dotenv not installed, .env files are simply ignored, MDC_API_KEY must be set directly instead
+    pass  # python-dotenv not installed, .env files are ignored, MDC_API_KEY must be set directly
 
 
 LIKELY_AUDIO_COLUMNS = ["audio", "path", "audio_path", "clip_path", "file"]
@@ -71,15 +59,14 @@ def guess_column(columns, candidates, override):
         if c in columns:
             return c
     raise SystemExit(
-        f"Could not guess the right column automatically. Actual columns found: {list(columns)}\n"
+        f"Could not match a column automatically. Actual columns found: {list(columns)}\n"
         f"Pass the correct one explicitly with --audio-column or --text-column."
     )
 
 
 def normalize_split(hf_or_df, audio_override, text_override):
-    """Accepts either a pandas DataFrame or an already-HF Dataset for one
-    split, returns a proper HF Dataset with 'audio' (cast to 16kHz) and
-    'sentence' columns, regardless of what the source called them."""
+    """Accepts a pandas DataFrame or an HF Dataset for one split, returns
+    a Dataset with standardized 'audio' (16kHz) and 'sentence' columns."""
     if hasattr(hf_or_df, "column_names"):  # already a datasets.Dataset
         columns = hf_or_df.column_names
         audio_col = guess_column(columns, LIKELY_AUDIO_COLUMNS, audio_override)
@@ -96,16 +83,29 @@ def normalize_split(hf_or_df, audio_override, text_override):
             columns={audio_col: "audio", text_col: "sentence"}
         ))
 
-    return ds.cast_column("audio", Audio(sampling_rate=16000))
+    # A large_string-backed column cannot be cast directly to Audio
+    # (ArrowNotImplementedError). Rebuilding via from_dict normalizes the
+    # underlying Arrow type to plain string, which the Audio cast accepts.
+    ds = Dataset.from_dict({col: ds[col] for col in ds.column_names})
+    ds = ds.cast_column("audio", Audio(sampling_rate=16000))
+
+    before = len(ds)
+    ds = ds.filter(lambda ex: ex["sentence"] is not None and ex["sentence"].strip() != "")
+    dropped = before - len(ds)
+    if dropped:
+        print(f"  Dropped {dropped} examples with empty/missing transcription")
+    return ds
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset-id", required=True,
-                     help="The Pashto Common Voice dataset ID from its Mozilla Data Collective page URL")
-    ap.add_argument("--out", default="data", help="Where to save the processed dataset")
-    ap.add_argument("--audio-column", default=None, help="Override if auto-detection guesses wrong")
-    ap.add_argument("--text-column", default=None, help="Override if auto-detection guesses wrong")
+                     help="Pashto Common Voice dataset ID, from its Mozilla Data Collective page URL")
+    ap.add_argument("--out", default="data", help="Output path for the processed dataset")
+    ap.add_argument("--audio-column", default=None, help="Overrides auto-detection")
+    ap.add_argument("--text-column", default=None, help="Overrides auto-detection")
+    ap.add_argument("--test-size", type=float, default=0.1,
+                     help="Fraction held out as a test split when the source dataset has none")
     args = ap.parse_args()
 
     import datacollective  # imported here so --help works without the package installed
@@ -114,7 +114,7 @@ def main():
     try:
         result = datacollective.load_dataset(args.dataset_id, return_format="hf")
     except ImportError:
-        print('The "hf" extra isn\'t installed (pip install "datacollective[hf]"), falling back to pandas.')
+        print('The "hf" extra is not installed (pip install "datacollective[hf]"), falling back to pandas.')
         result = datacollective.load_dataset(args.dataset_id, return_format="pandas")
 
     os.makedirs(args.out, exist_ok=True)
@@ -127,14 +127,11 @@ def main():
             dataset_dict[split_name] = normalize_split(split_data, args.audio_column, args.text_column)
         dataset = DatasetDict(dataset_dict)
     else:
-        # A single Dataset or a single pandas DataFrame, no separate splits
-        # reported, wrap it as "train" so the rest of the pipeline (which
-        # expects a DatasetDict) works unchanged, split it yourself with
-        # dataset["train"].train_test_split(test_size=0.1) if you want a
-        # real held-out test set instead of evaluating on training data.
-        print("No separate splits reported, treating the whole thing as 'train'.")
-        print("Consider splitting it yourself (see the comment in this script) before fine-tuning.")
-        dataset = DatasetDict({"train": normalize_split(result, args.audio_column, args.text_column)})
+        # No splits reported, so a train/test split is cut here directly
+        # (90/10 by default) rather than left for evaluate.py to fail on.
+        print(f"No separate splits reported, cutting a {int((1 - args.test_size) * 100)}/{int(args.test_size * 100)} train/test split.")
+        full_dataset = normalize_split(result, args.audio_column, args.text_column)
+        dataset = full_dataset.train_test_split(test_size=args.test_size, seed=42)
 
     dataset.save_to_disk(args.out)
 

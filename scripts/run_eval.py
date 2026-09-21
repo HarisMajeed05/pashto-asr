@@ -1,18 +1,18 @@
 """
-scripts/evaluate.py
+scripts/run_eval.py
 ======================
-Computes Word Error Rate (WER) on the Pashto test split. Run this TWICE:
-once with the stock model (before), once with your fine-tuned checkpoint
-(after). The gap between those two numbers is the actual result this
-project is measuring, not a single absolute score.
+Computes Word Error Rate (WER) on the Pashto test split. Run twice, once
+with the stock model (before), once with a fine-tuned checkpoint (after).
+The gap between the two numbers is the result that matters, not either
+number alone.
 
 USAGE
 -----
-    # Baseline, stock model, never seen Pashto fine-tuning
-    python scripts/evaluate.py --model openai/whisper-small --data data/
+    # Baseline, stock model
+    python scripts/run_eval.py --model openai/whisper-small --data data/
 
     # After fine-tuning
-    python scripts/evaluate.py --model checkpoints/pashto/final --data data/
+    python scripts/run_eval.py --model checkpoints/pashto/final --data data/
 """
 
 import argparse
@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import evaluate as hf_evaluate
 import torch
-from datasets import load_from_disk
+from datasets import load_from_disk, Audio
 from transformers import WhisperForConditionalGeneration
 
 from common import load_processor, prepare_example
@@ -32,9 +32,9 @@ from common import load_processor, prepare_example
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="Model id or local checkpoint path")
-    ap.add_argument("--data", default="data", help="Path from prepare_data.py")
+    ap.add_argument("--data", default="data", help="Path produced by prepare_data.py")
     ap.add_argument("--split", default="test")
-    ap.add_argument("--max-samples", type=int, default=None, help="Limit for a quick sanity check")
+    ap.add_argument("--max-samples", type=int, default=None, help="Limits examples for a quick check")
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     args = ap.parse_args()
 
@@ -47,6 +47,8 @@ def main():
     model.eval()
 
     dataset = load_from_disk(args.data)[args.split]
+    dataset = dataset.cast_column("audio", Audio(decode=False))
+    dataset = dataset.filter(lambda ex: ex["sentence"] is not None and ex["sentence"].strip() != "")
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
 
